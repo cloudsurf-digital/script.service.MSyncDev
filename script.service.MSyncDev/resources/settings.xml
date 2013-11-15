@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8" standalone="yes"?>
+<settings>
+    <category label=”Settings”>
+        <setting label="Incoming music destination" type="folder" id="incomingdir" default=""/>
+        <setting label="Songs to sync on device" type="slider" id="song_count" subsetting="true" default="20" range="0,1,100" option="int" />
+        <setting type="sep"/>
+        <setting id="debug" type="bool" label="32013" default="false"/>
+    </category>
+</settings>

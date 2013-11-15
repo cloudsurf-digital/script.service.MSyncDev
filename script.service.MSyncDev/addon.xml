@@ -1,0 +1,25 @@
+﻿<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<addon id="plugin.service.MSyncDev" name="Music to USB"
+	version="0.0.1" provider-name="Lasse Borchard">
+	<requires>
+		<import addon="xbmc.python" version="2.1.0" />
+	</requires>
+	<extension point="xbmc.service" library="default.py" start="login">
+	<extension point="xbmc.python.pluginsource" library="default.py">
+	<provides></provides>
+	</extension>
+	<extension point="xbmc.addon.metadata">
+		<language>en</language>
+		<platform>all</platform>
+		<summary lang="en">Syncronize music to USB-Masstorages (XBMC).</summary>
+		<disclaimer lang="en">Be careful with Masstorags containing important data, it could be delete and get lost.</disclaimer>
+		<description lang="en">
+			A randomly choosen tracklist of the TOP100 Songs will be copied on the provided USB masstorage.
+		</description>
+		<license>GNU GENERAL PUBLIC LICENSE. Version 3</license>
+		<email>mastermind-dev@johnny-die-tulpe.de</email>
+		<website>https://www.johnny-die-tulpe.de/</website>
+		<source>git://github.com/johnny-die-tulpe/</source>
+	</extension>
+</addon>
+
