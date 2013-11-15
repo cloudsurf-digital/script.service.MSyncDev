@@ -26,8 +26,9 @@ import subprocess
 import threading 
 import Queue
 import time
-import fcntl
 import pty
+
+KNOWN_FILE = ".MSyncDev_known"
 
 def caller(command, use_pty=True):
   if use_pty:
@@ -37,12 +38,10 @@ def caller(command, use_pty=True):
     return subprocess.check_output(command, stderr=subprocess.PIPE)
   return os.fdopen(master)
 
+class MyDevice(object):
+  def __init__(self, 
  
 class UdevListener(threading.Thread): 
-  """
-  UDEV  [259613.929124] remove   /devices/pci0000:00/0000:00:1d.0/usb2/2-1/2-1.7/2-1.7:1.0/host7/target7:0:0/7:0:0:0/block/sdb (block)
-  UDEV  [259619.580705] add      /devices/pci0000:00/0000:00:1d.0/usb2/2-1/2-1.7/2-1.7:1.0/host8/target8:0:0/8:0:0:0/block/sdb (block)
-  """
   Eventq = Queue.Queue()
   def __init__(self,): 
     threading.Thread.__init__(self)
@@ -50,21 +49,17 @@ class UdevListener(threading.Thread):
  
 
   def dev_remove(self, event):
+    """doin device stuff on remove"""
     return event
+
+  def useable_dev(self, dev):
+    """ probe if device is useable for xbmc """
+    if dev['ID_BUS'] == "usb" \
+      and dev['ID_USB_DRIVER'] == "usb-storage" \
+      and dev['ID_TYPE'] == "disk":
+      return True
+    
   def dev_add(self, event):
-    """
-E: ID_SERIAL=JetFlash_Transcend_16GB_201651680-0:0
-E: ID_SERIAL_SHORT=201651680
-E: ID_TYPE=disk
-E: ID_USB_DRIVER=usb-storage
-E: ID_USB_INTERFACES=:080650:
-E: ID_USB_INTERFACE_NUM=00
-E: ID_VENDOR=JetFlash
-E: ID_VENDOR_ENC=JetFlash
-E: ID_VENDOR_ID=8564
-E: MAJOR=8
-E: MINOR=16
-    """
     command = ["/sbin/udevadm", "info", "--name=%s" % (event['dev']), "--query=property" ] 
     stdout = caller(command, use_pty=False)
     print "getting info from device"
@@ -74,14 +69,19 @@ E: MINOR=16
         break
       k,v = line.split('=')
       tmp_dict[k] = v
-    event.update(tmp_dict)
+
+    if self.useable_dev(tmp_dict):
+      event.update(tmp_dict)
+      useable_keys = ["DEVNAME", "ID_VENDOR", "ID_MODEL", "ID_FS_UUID" ]
+      for key in useable_keys:
+        event[key] = tmp_dict[key]
+
     return event
       
 
   def run(self): 
     command = [ "/sbin/udevadm", "monitor", "--udev", "--subsystem-match=block" ]
     stdout = caller(command)
-
     while True:
       line = stdout.readline()
       if line and not "": 
@@ -93,10 +93,56 @@ E: MINOR=16
             event = self.dev_add(event)
           elif event['action'] == "remove":
             event = self.dev_remove(event)
-          else:
-            event['info'] = "unknown event"
-          UdevListener.Eventq.put(event)
+          if event:
+            UdevListener.Eventq.put(event)
     stdout.close()
+
+def get_mount(devname):
+  PROC_M = "/proc/mounts"
+  for l in open(PROC_M, "r"):
+    mp = l.split(" ")[1]
+    if mp == devname:
+      return l.split(" ")[2]
+
+def register_device(mountpoint, dev_id):
+  def write_id():
+    fh = open(f, "w+")
+    fh.write(dev_id)
+    fh.close()
+
+  f = mountpoint + "/" + KNOWN_FILE
+  if os.path.isfile(f):
+    for l in open(f, "r"):
+      if l == dev_id:
+        return (False, True)
+      else:
+        write_id()
+        return (False, False)
+  else:
+    write_id()
+    return(True, False)
+
+def is_writable(name):
+  """Return true if the file is writable from the current user
+  """
+  return os.access(name, os.W_OK)
+
+def new_device(dev):
+  """Managing stuff for new detected device"""
+  mountpoint = get_mount(dev['DEVNAME'])
+  if mountpoint:
+    dev['is_mounted'] = True
+  else:
+    dev['is_mounted'] = False
+    return
+
+  if is_writable(mountpoint):
+    dev['readonly'] = False
+    is_new, is_registered = register_device(mountpoint, dev['ID_FS_UUID'])
+    dev['is_new'] = is_new
+    dev['is_registered'] = is_registered
+  else:
+    dev['readonly'] = True
 
 def main():
   mylistener = UdevListener() 
@@ -107,7 +153,10 @@ def main():
     if not UdevListener.Eventq.empty():
       event = UdevListener.Eventq.get()
       print "%s: DEVICE event occured: Device: %s Action: %s" % (event['date'], event['dev'], event['action'])
-      print event
+      if event['action'] == "add":
+        time.sleep(0.5)
+        new_device(event)
+
     time.sleep(0.5)
   print "UdevListener dies"
 
