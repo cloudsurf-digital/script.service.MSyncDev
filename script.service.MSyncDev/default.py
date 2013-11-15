@@ -20,11 +20,23 @@
 #import xbmcnotify
 
 import re
+import os
 import sys
 import subprocess
 import threading 
 import Queue
 import time
+import fcntl
+import pty
+
+def caller(command, use_pty=True):
+  if use_pty:
+    master, slave = pty.openpty()
+    proc = subprocess.Popen(command, stdout=slave, stderr=subprocess.STDOUT, stdin=subprocess.PIPE, close_fds=True)
+  else:
+    return subprocess.check_output(command, stderr=subprocess.PIPE)
+  return os.fdopen(master)
+
  
 class UdevListener(threading.Thread): 
   """
@@ -34,43 +46,70 @@ class UdevListener(threading.Thread):
   Eventq = Queue.Queue()
   def __init__(self,): 
     threading.Thread.__init__(self)
-    self.command = [ "/sbin/udevadm", "monitor", "--udev", "--subsystem-match=block" ]
-    self.udev_re = re.compile(r'UDEV\w+\[\d+\.\d+\]\w+(?P<action>\W+)\w+.*?/block/(?P<dev>\W+)\W+\(block\)')
+    self.udev_re = re.compile(r'UDEV\s+\[\d+\.\d+\]\s+(?P<action>\S+)\s+\S+/block/(?P<dev>\S+)\s+\(block\)')
  
+
+  def dev_remove(self, event):
+    return event
+  def dev_add(self, event):
+    """
+E: ID_SERIAL=JetFlash_Transcend_16GB_201651680-0:0
+E: ID_SERIAL_SHORT=201651680
+E: ID_TYPE=disk
+E: ID_USB_DRIVER=usb-storage
+E: ID_USB_INTERFACES=:080650:
+E: ID_USB_INTERFACE_NUM=00
+E: ID_VENDOR=JetFlash
+E: ID_VENDOR_ENC=JetFlash
+E: ID_VENDOR_ID=8564
+E: MAJOR=8
+E: MINOR=16
+    """
+    command = ["/sbin/udevadm", "info", "--name=%s" % (event['dev']), "--query=property" ] 
+    stdout = caller(command, use_pty=False)
+    print "getting info from device"
+    tmp_dict = {}
+    for line in stdout.splitlines():
+      if not line or line == "":
+        break
+      k,v = line.split('=')
+      tmp_dict[k] = v
+    event.update(tmp_dict)
+    return event
+      
+
   def run(self): 
-    UdevListener.Eventq.put({'date' : time.strftime("%X"),
-                             'action' : "started dev monitor",
-                             'dev': None })
-    proc = subprocess.Popen(self.command, stdout=subprocess.PIPE)
-    
+    command = [ "/sbin/udevadm", "monitor", "--udev", "--subsystem-match=block" ]
+    stdout = caller(command)
+
     while True:
-      line = proc.stdout.readline()
-      #proc.stdout.fush()
-      UdevListener.Eventq.put({'date' : time.strftime("%X"),
-                               'action' : "found: " + line,
-                               'dev': None })
-      eventmatch = re.search(self.udev_re, line)
-      if eventmatch:
-        event = eventmatch.groupdict()
-        event['date'] = time.strftime("%X")
-        UdevListener.Eventq.put(event)
-      else:
-        UdevListener.Eventq.put({'date' : time.strftime("%X"),
-                                 'action' : line + "not matched",
-                                 'dev': None })
-
-
+      line = stdout.readline()
+      if line and not "": 
+        eventmatch = re.search(self.udev_re, line)
+        if eventmatch:
+          event = eventmatch.groupdict()
+          event['date'] = time.strftime("%X")
+          if event['action'] == "add": 
+            event = self.dev_add(event)
+          elif event['action'] == "remove":
+            event = self.dev_remove(event)
+          else:
+            event['info'] = "unknown event"
+          UdevListener.Eventq.put(event)
+    stdout.close()
 
 def main():
   mylistener = UdevListener() 
   mylistener.daemon = True
   mylistener.start()
   print "Start queue listening"
-  while True:
+  while mylistener.isAlive():
     if not UdevListener.Eventq.empty():
       event = UdevListener.Eventq.get()
-      print "DEVICE event occured: Device: %s Action: %s" % (event['dev'], event['action'])
-    time.sleep(1)
+      print "%s: DEVICE event occured: Device: %s Action: %s" % (event['date'], event['dev'], event['action'])
+      print event
+    time.sleep(0.5)
+  print "UdevListener dies"
 
 if __name__ == "__main__":
   main()
