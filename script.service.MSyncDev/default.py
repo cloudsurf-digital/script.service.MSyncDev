@@ -28,7 +28,6 @@ import Queue
 import time
 import pty
 
-KNOWN_FILE = ".MSyncDev_known"
 
 def caller(command, use_pty=True):
   if use_pty:
@@ -39,8 +38,53 @@ def caller(command, use_pty=True):
   return os.fdopen(master)
 
 class MyDevice(object):
-  def __init__(self, 
- 
+  KNOWN_FILE = ".MSyncDev"
+  def __init__(self, event):
+    self.activate_time = event['date']
+    self.devname = event['dev']
+    self.mountpoint = self.get_mount()
+    self.fs_uuid = event['ID_FS_UUID']
+    self.readonly = not bool(self.is_writable())
+    self.vendor = event['ID_VENDOR']
+    self.model = event['ID_MODEL']
+    self.is_new, self.is_registered = self.register_device()
+
+  def get_mount(self):
+    PROC_M = "/proc/mounts"
+    for l in open(PROC_M, "r"):
+      mp = l.split(" ")[1]
+      if mp == self.devname:
+        return l.split(" ")[2]
+
+  def is_mounted(self):
+    if self.mountpoint:
+      return True
+    return False
+  
+  def is_writable(self):
+    """Return true if the file is writable from the current user
+    """
+    return os.access(self.mountpoint, os.W_OK)
+
+  def register_device(self):
+    def write_id():
+      fh = open(f, "w+")
+      fh.write("%s %s" % (time.strftime("%X"), self.fs_uuid))
+      fh.close()
+  
+    f = self.mountpoint + "/" + MyDevice.KNOWN_FILE
+    if os.path.isfile(f):
+      for l in open(f, "r"):
+        if l.split(" ")[1] == self.fs_uuid:
+          return (False, True)
+        else:
+          write_id()
+          return (False, False)
+    else:
+      write_id()
+      return(True, False)
+
+
 class UdevListener(threading.Thread): 
   Eventq = Queue.Queue()
   def __init__(self,): 
@@ -97,65 +141,24 @@ class UdevListener(threading.Thread):
             UdevListener.Eventq.put(event)
     stdout.close()
 
-def get_mount(devname):
-  PROC_M = "/proc/mounts"
-  for l in open(PROC_M, "r"):
-    mp = l.split(" ")[1]
-    if mp == devname:
-      return l.split(" ")[2]
-
-def register_device(mountpoint, dev_id):
-  def write_id():
-    fh = open(f, "w+")
-    fh.write(dev_id)
-    fh.close()
-
-  f = mountpoint + "/" + KNOWN_FILE
-  if os.path.isfile(f):
-    for l in open(f, "r"):
-      if l == dev_id:
-        return (False, True)
-      else:
-        write_id()
-        return (False, False)
-  else:
-    write_id()
-    return(True, False)
-
-def is_writable(name):
-  """Return true if the file is writable from the current user
-  """
-  return os.access(name, os.W_OK)
-
-def new_device(dev):
-  """Managing stuff for new detected device"""
-  mountpoint = get_mount(dev['DEVNAME'])
-  if mountpoint:
-    dev['is_mounted'] = True
-  else:
-    dev['is_mounted'] = False
-    return
-
-  if is_writable(mountpoint):
-    dev['readonly'] = False
-    is_new, is_registered = register_device(mountpoint, dev['ID_FS_UUID'])
-    dev['is_new'] = is_new
-    dev['is_registered'] = is_registered
-  else:
-    dev['readonly'] = True
 
 def main():
   mylistener = UdevListener() 
   mylistener.daemon = True
   mylistener.start()
   print "Start queue listening"
+  my_devices = []
   while mylistener.isAlive():
     if not UdevListener.Eventq.empty():
       event = UdevListener.Eventq.get()
       print "%s: DEVICE event occured: Device: %s Action: %s" % (event['date'], event['dev'], event['action'])
       if event['action'] == "add":
         time.sleep(0.5)
-        new_device(event)
+        my_devices.append(MyDevice(event))
+      elif event['action'] == "remove":
+        for dev in my_devices if dev.devname == event['dev']: dev.remove()
+        my_devices = [ dev for dev in my_devices if dev.devname != event['dev']]
+        
 
     time.sleep(0.5)
   print "UdevListener dies"
