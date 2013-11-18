@@ -26,6 +26,7 @@ import subprocess
 import threading 
 import Queue
 import time
+import fnmatch
 import pty
 
 
@@ -39,22 +40,40 @@ def caller(command, use_pty=True):
 
 class MyDevice(object):
   KNOWN_FILE = ".MSyncDev"
+  MUSIC_SEARCHPATTERN = "*.mp3"
   def __init__(self, event):
     self.activate_time = event['date']
     self.devname = event['dev']
     self.mountpoint = self.get_mount()
+    print self.mountpoint
     self.fs_uuid = event['ID_FS_UUID']
     self.readonly = not bool(self.is_writable())
     self.vendor = event['ID_VENDOR']
     self.model = event['ID_MODEL']
     self.is_new, self.is_registered = self.register_device()
+    self.files_on_device = self.music_scan()
+    print self.files_on_device
+
+
+  def music_scan(self):
+    """os.walk """
+    matches = []
+    for root, dirs, filenames in os.walk(self.mountpoint):
+      for filename in fnmatch.filter(filenames, MyDevice.MUSIC_SEARCHPATTERN):
+        matches.append(os.path.join(root, filename))
+    return matches
+
+  def music_sync(self):
+    """syncs music to xbmc library"""
 
   def get_mount(self):
     PROC_M = "/proc/mounts"
     for l in open(PROC_M, "r"):
+      #import pdb; pdb.set_trace()
+      dev = l.split(" ")[0]
       mp = l.split(" ")[1]
-      if mp == self.devname:
-        return l.split(" ")[2]
+      if dev == "/dev/" + self.devname:
+        return mp
 
   def is_mounted(self):
     if self.mountpoint:
@@ -68,7 +87,7 @@ class MyDevice(object):
 
   def register_device(self):
     def write_id():
-      fh = open(f, "w+")
+      fh = open(f, "w")
       fh.write("%s %s" % (time.strftime("%X"), self.fs_uuid))
       fh.close()
   
@@ -89,7 +108,7 @@ class UdevListener(threading.Thread):
   Eventq = Queue.Queue()
   def __init__(self,): 
     threading.Thread.__init__(self)
-    self.udev_re = re.compile(r'UDEV\s+\[\d+\.\d+\]\s+(?P<action>\S+)\s+\S+/block/(?P<dev>\S+)\s+\(block\)')
+    self.udev_re = re.compile(r'UDEV\s+\[\d+\.\d+\]\s+(?P<action>\S+)\s+\S+/block/(\S+/)?(?P<dev>\S+)\s+\(block\)')
  
 
   def dev_remove(self, event):
@@ -100,6 +119,7 @@ class UdevListener(threading.Thread):
     """ probe if device is useable for xbmc """
     if dev['ID_BUS'] == "usb" \
       and dev['ID_USB_DRIVER'] == "usb-storage" \
+      and "ID_FS_UUID" in dev \
       and dev['ID_TYPE'] == "disk":
       return True
     
@@ -119,6 +139,8 @@ class UdevListener(threading.Thread):
       useable_keys = ["DEVNAME", "ID_VENDOR", "ID_MODEL", "ID_FS_UUID" ]
       for key in useable_keys:
         event[key] = tmp_dict[key]
+    else:
+      event = None
 
     return event
       
@@ -156,7 +178,9 @@ def main():
         time.sleep(0.5)
         my_devices.append(MyDevice(event))
       elif event['action'] == "remove":
-        for dev in my_devices if dev.devname == event['dev']: dev.remove()
+        for dev in my_devices:
+          if dev.devname == event['dev']: dev.remove()
+
         my_devices = [ dev for dev in my_devices if dev.devname != event['dev']]
         
 
