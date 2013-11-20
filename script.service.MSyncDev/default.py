@@ -30,13 +30,6 @@ import fnmatch
 import pty
 
 
-def caller(command, use_pty=True):
-  if use_pty:
-    master, slave = pty.openpty()
-    proc = subprocess.Popen(command, stdout=slave, stderr=subprocess.STDOUT, stdin=subprocess.PIPE, close_fds=True)
-  else:
-    return subprocess.check_output(command, stderr=subprocess.PIPE)
-  return os.fdopen(master)
 
 class MyDevice(object):
   KNOWN_FILE = ".MSyncDev"
@@ -45,26 +38,39 @@ class MyDevice(object):
     self.activate_time = event['date']
     self.devname = event['dev']
     self.mountpoint = self.get_mount()
-    print self.mountpoint
+    print "Mountpoint: " + self.mountpoint
     self.fs_uuid = event['ID_FS_UUID']
-    self.readonly = not bool(self.is_writable())
+    self.readonly = not bool(self.is_writeable(self.mountpoint))
     self.vendor = event['ID_VENDOR']
     self.model = event['ID_MODEL']
     self.is_new, self.is_registered = self.register_device()
-    self.files_on_device = self.music_scan()
-    print self.files_on_device
+    self.files_on_device = self.music_scan(self.mountpoint)
+    #print self.files_on_device
 
 
-  def music_scan(self):
+  def music_scan(self, directory):
     """os.walk """
     matches = []
-    for root, dirs, filenames in os.walk(self.mountpoint):
+    for root, dirs, filenames in os.walk(directory):
       for filename in fnmatch.filter(filenames, MyDevice.MUSIC_SEARCHPATTERN):
-        matches.append(os.path.join(root, filename))
+        #matches.append(os.path.join(root, filename))
+        matches.append((root, filename))
     return matches
+
+
+  def set_sync_target(self, directory):
+    if not self.is_writeable(directory): 
+      return None
+    else:
+      self.destination_dir = directory
+      return True
 
   def music_sync(self):
     """syncs music to xbmc library"""
+    existing_files = self.music_scan(self.destination_dir)
+    difference = set([ files[1] for files in self.files_on_device ]) - set([ files[1] for files in existing_files ])
+    print "Difference: " + str(difference)
+
 
   def get_mount(self):
     PROC_M = "/proc/mounts"
@@ -72,6 +78,7 @@ class MyDevice(object):
       #import pdb; pdb.set_trace()
       dev = l.split(" ")[0]
       mp = l.split(" ")[1]
+      print "Probing: " + dev + " vs /dev/" + self.devname
       if dev == "/dev/" + self.devname:
         return mp
 
@@ -80,10 +87,10 @@ class MyDevice(object):
       return True
     return False
   
-  def is_writable(self):
-    """Return true if the file is writable from the current user
+  def is_writeable(self, directory):
+    """Return true if the file is writeable from the current user
     """
-    return os.access(self.mountpoint, os.W_OK)
+    return os.access(directory, os.W_OK)
 
   def register_device(self):
     def write_id():
@@ -164,7 +171,16 @@ class UdevListener(threading.Thread):
     stdout.close()
 
 
+def caller(command, use_pty=True):
+  if use_pty:
+    master, slave = pty.openpty()
+    proc = subprocess.Popen(command, stdout=slave, stderr=subprocess.STDOUT, stdin=subprocess.PIPE, close_fds=True)
+  else:
+    return subprocess.check_output(command, stderr=subprocess.PIPE)
+  return os.fdopen(master)
+
 def main():
+  CONFIG_DEST_DIR = "/home/lborchard/Music_Test/"
   mylistener = UdevListener() 
   mylistener.daemon = True
   mylistener.start()
@@ -175,8 +191,11 @@ def main():
       event = UdevListener.Eventq.get()
       print "%s: DEVICE event occured: Device: %s Action: %s" % (event['date'], event['dev'], event['action'])
       if event['action'] == "add":
-        time.sleep(0.5)
-        my_devices.append(MyDevice(event))
+        time.sleep(2.5)
+        newdevice = MyDevice(event)
+        newdevice.set_sync_target(CONFIG_DEST_DIR)
+        newdevice.music_sync()
+        my_devices.append(newdevice)
       elif event['action'] == "remove":
         for dev in my_devices:
           if dev.devname == event['dev']: dev.remove()
